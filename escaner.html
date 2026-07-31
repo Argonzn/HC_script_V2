@@ -67,20 +67,29 @@
     await qr.start(
       trasera.id,
       {
-        fps: 12,
-        qrbox: { width: 300, height: 130 },
+        fps: 10,
+        // Sin qrbox: decodifica el fotograma completo (evita el bug de recorte con códigos anchos)
         formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128],
         videoConstraints: {
           deviceId: trasera.id,
           width: { ideal: 1920 },
-          height: { ideal: 1080 },
-          focusMode: 'continuous'
+          height: { ideal: 1080 }
         }
       },
       (texto) => buscar(texto),
       (msgError) => { /* intentos fallidos normales, se ignoran */ }
     );
     escaneando = true;
+
+    setTimeout(() => {
+      try {
+        const capacidades = qr.getRunningTrackCapabilities();
+        if (capacidades && capacidades.torch) {
+          document.getElementById('btnLinterna').style.display = 'block';
+        }
+      } catch(e) {}
+    }, 800);
+  }
 
     // Botón de linterna, si el dispositivo lo soporta
     try {
