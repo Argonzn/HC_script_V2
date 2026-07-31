@@ -38,9 +38,11 @@
     <option value="">Selecciona digitador...</option>
     <option>JEFFREY</option><option>SOFIA</option><option>TANIA</option>
     <option>KINBERLY</option><option>ISABEL</option>
+    <option>KINBERLY</option><option></option>
   </select>
 
   <div id="lector"></div>
+ <button id="btnLinterna" class="btn" style="display:none;background:#374151;color:#fff;" onclick="toggleLinterna()">💡 Linterna</button>
   <div id="resultado"></div>
 </div>
 
@@ -61,10 +63,38 @@
   async function iniciarCamara(){
     const camaras = await Html5Qrcode.getCameras();
     const trasera = camaras.find(c => /back|tras|rear|environment/i.test(c.label)) || camaras[camaras.length - 1];
-    await qr.start(trasera.id,
-      { fps: 15, qrbox: { width: 280, height: 140 }, formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128] },
-      (texto) => buscar(texto), () => {});
+
+    await qr.start(
+      trasera.id,
+      {
+        fps: 12,
+        qrbox: { width: 300, height: 130 },
+        formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128],
+        videoConstraints: {
+          deviceId: trasera.id,
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          focusMode: 'continuous'
+        }
+      },
+      (texto) => buscar(texto),
+      (msgError) => { /* intentos fallidos normales, se ignoran */ }
+    );
     escaneando = true;
+
+    // Botón de linterna, si el dispositivo lo soporta
+    try {
+      const capacidades = qr.getRunningTrackCapabilities();
+      if (capacidades && capacidades.torch) {
+        document.getElementById('btnLinterna').style.display = 'block';
+      }
+    } catch(e) {}
+  }
+
+  let linternaActiva = false;
+  function toggleLinterna(){
+    linternaActiva = !linternaActiva;
+    qr.applyVideoConstraints({ advanced: [{ torch: linternaActiva }] }).catch(()=>{});
   }
 
   function hoyISO(){ const h=new Date(); return h.getFullYear()+'-'+String(h.getMonth()+1).padStart(2,'0')+'-'+String(h.getDate()).padStart(2,'0'); }
