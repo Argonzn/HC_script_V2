@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Escáner de Asistencia</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<style>
+  * { box-sizing:border-box; font-family:Arial, sans-serif; }
+  body { margin:0; background:#0f1115; color:#f1f3f5; min-height:100vh; padding:16px; }
+  .wrap { max-width:480px; margin:0 auto; }
+  h2 { font-size:18px; margin:6px 0 14px; }
+  select, input { width:100%; background:#1b1f27; border:1px solid #2a3040; color:#fff;
+                  border-radius:10px; padding:10px; font-size:14px; margin-bottom:10px; }
+  #lector { border-radius:12px; overflow:hidden; margin-bottom:14px; }
+  .resultado { border-radius:14px; padding:16px; margin-bottom:12px; }
+  .resultado.ok  { background:#0f2e1c; border:1px solid #198754; }
+  .resultado.err { background:#301316; border:1px solid #dc3545; }
+  .resultado h3 { margin:0 0 6px; font-size:15px; }
+  .resultado p { margin:3px 0; font-size:13px; }
+  .btn { width:100%; padding:13px; border:none; border-radius:10px; font-weight:bold; font-size:14px; margin-top:8px; cursor:pointer; }
+  .btn-asis { background:#198754; color:#fff; }
+  .btn-no { background:#dc3545; color:#fff; }
+  #digitador { display:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h2>📷 Escáner de Asistencia</h2>
+
+  <select id="perfil" onchange="cambiarPerfil()">
+    <option value="">Selecciona tu punto...</option>
+    <option value="TRIAJE">TRIAJE</option>
+    <option value="ADMISION">ADMISIÓN</option>
+    <option value="EMERGENCIA">MARCADOR DE EMERGENCIA</option>
+  </select>
+  <select id="digitador">
+    <option value="">Selecciona digitador...</option>
+    <option>JEFFREY</option><option>SOFIA</option><option>TANIA</option>
+    <option>KINBERLY</option><option>ISABEL</option>
+  </select>
+
+  <div id="lector"></div>
+  <div id="resultado"></div>
+</div>
+
+<script>
+  // ⚠️ Pega aquí la URL de tu Web App terminada en /exec
+  const URL_BASE = 'https://script.google.com/macros/s/https://script.google.com/macros/s/AKfycbyBFf3DnPZuX54EJbtIThOLJ-8BO6CqYTiJ-wc0BavWPKptmwfiJm1OvX8nuZv1-UrQ/exec';
+
+  let ultimo = null;
+  let qr = new Html5Qrcode('lector');
+  let escaneando = false;
+
+  function cambiarPerfil(){
+    const p = document.getElementById('perfil').value;
+    document.getElementById('digitador').style.display = (p === 'ADMISION' || p === 'EMERGENCIA') ? 'block' : 'none';
+    if (p && !escaneando) iniciarCamara();
+  }
+
+  async function iniciarCamara(){
+    const camaras = await Html5Qrcode.getCameras();
+    const trasera = camaras.find(c => /back|tras|rear|environment/i.test(c.label)) || camaras[camaras.length - 1];
+    await qr.start(trasera.id,
+      { fps: 15, qrbox: { width: 280, height: 140 }, formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128] },
+      (texto) => buscar(texto), () => {});
+    escaneando = true;
+  }
+
+  function hoyISO(){ const h=new Date(); return h.getFullYear()+'-'+String(h.getMonth()+1).padStart(2,'0')+'-'+String(h.getDate()).padStart(2,'0'); }
+
+  async function buscar(codigo){
+    const resp = await fetch(URL_BASE + '?api=buscar&fecha=' + hoyISO() + '&codigo=' + encodeURIComponent(codigo));
+    const r = await resp.json();
+    mostrar(r);
+  }
+
+  function mostrar(r){
+    const div = document.getElementById('resultado');
+    if (!r.ok){ div.innerHTML = '<div class="resultado err"><h3>❌</h3><p>'+r.mensaje+'</p></div>'; return; }
+    ultimo = r;
+    div.innerHTML = '<div class="resultado ok"><h3>✅ '+(r.nombre||r.dni)+'</h3>' +
+      '<p>DNI '+r.dni+' · HC '+r.hc+' · '+r.turno+'</p></div>' +
+      '<button class="btn btn-asis" onclick="registrar(\'ASISTIO\')">✅ ASISTIÓ</button>' +
+      '<button class="btn btn-no" onclick="registrar(\'NO ASISTIO\')">❌ NO ASISTIÓ</button>';
+  }
+
+  async function registrar(estado){
+    const perfil = document.getElementById('perfil').value;
+    const dig = document.getElementById('digitador').value;
+    if ((perfil==='ADMISION'||perfil==='EMERGENCIA') && !dig){ alert('Selecciona el digitador'); return; }
+    const url = URL_BASE + '?api=registrar&hoja='+encodeURIComponent(ultimo.hoja)+'&fila='+ultimo.fila+
+                '&perfil='+perfil+'&estado='+encodeURIComponent(estado)+'&digitador='+encodeURIComponent(dig);
+    const resp = await fetch(url);
+    const r = await resp.json();
+    alert(r.mensaje);
+    document.getElementById('resultado').innerHTML = '';
+  }
+</script>
+</body>
+</html>
