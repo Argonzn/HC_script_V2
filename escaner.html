@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Escáner de Asistencia</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
 <style>
   * { box-sizing:border-box; font-family:Arial, sans-serif; }
   body { margin:0; background:#0f1115; color:#f1f3f5; min-height:100vh; padding:16px; }
@@ -12,15 +12,27 @@
   h2 { font-size:18px; margin:6px 0 14px; }
   select, input { width:100%; background:#1b1f27; border:1px solid #2a3040; color:#fff;
                   border-radius:10px; padding:10px; font-size:14px; margin-bottom:10px; }
-  #lector { border-radius:12px; overflow:hidden; margin-bottom:14px; }
-  .resultado { border-radius:14px; padding:16px; margin-bottom:12px; }
+
+  .caja-video { position:relative; border-radius:12px; overflow:hidden; margin-bottom:8px; background:#000; }
+  #video { width:100%; display:block; }
+  .marco {
+    position:absolute; left:8%; right:8%; top:38%; bottom:38%;
+    border:3px solid #4ade80; border-radius:8px; pointer-events:none;
+    box-shadow:0 0 0 2000px rgba(0,0,0,.35);
+  }
+  #estadoScan { font-size:12px; color:#9aa4b2; text-align:center; margin-bottom:10px; min-height:16px; }
+
+  .btn { width:100%; padding:13px; border:none; border-radius:10px; font-weight:bold; font-size:14px; margin-top:8px; cursor:pointer; }
+  .btn-linterna { background:#374151; color:#fff; display:none; }
+  .btn-asis { background:#198754; color:#fff; }
+  .btn-no { background:#dc3545; color:#fff; }
+
+  .resultado { border-radius:14px; padding:16px; margin-bottom:12px; margin-top:10px; }
   .resultado.ok  { background:#0f2e1c; border:1px solid #198754; }
   .resultado.err { background:#301316; border:1px solid #dc3545; }
   .resultado h3 { margin:0 0 6px; font-size:15px; }
   .resultado p { margin:3px 0; font-size:13px; }
-  .btn { width:100%; padding:13px; border:none; border-radius:10px; font-weight:bold; font-size:14px; margin-top:8px; cursor:pointer; }
-  .btn-asis { background:#198754; color:#fff; }
-  .btn-no { background:#dc3545; color:#fff; }
+
   #digitador { display:none; }
 </style>
 </head>
@@ -38,21 +50,29 @@
     <option value="">Selecciona digitador...</option>
     <option>JEFFREY</option><option>SOFIA</option><option>TANIA</option>
     <option>KINBERLY</option><option>ISABEL</option>
-    <option>KINBERLY</option><option></option>
   </select>
 
-  <div id="lector"></div>
- <button id="btnLinterna" class="btn" style="display:none;background:#374151;color:#fff;" onclick="toggleLinterna()">💡 Linterna</button>
+  <div class="caja-video" id="cajaVideo" style="display:none;">
+    <video id="video"></video>
+    <div class="marco"></div>
+  </div>
+  <div id="estadoScan"></div>
+  <button id="btnLinterna" class="btn btn-linterna" onclick="toggleLinterna()">💡 Linterna</button>
+
   <div id="resultado"></div>
 </div>
 
 <script>
-  // ⚠️ Pega aquí la URL de tu Web App terminada en /exec
+  // ⚠️ URL de tu Web App de Apps Script, terminada en /exec
   const URL_BASE = 'https://script.google.com/macros/s/AKfycbyBFf3DnPZuX54EJbtIThOLJ-8BO6CqYTiJ-wc0BavWPKptmwfiJm1OvX8nuZv1-UrQ/exec';
 
   let ultimo = null;
-  let qr = new Html5Qrcode('lector');
+  let codeReader = null;
   let escaneando = false;
+  let ultimoCodigoLeido = '';
+  let ultimoLeidoEn = 0;
+  let mediaStreamActual = null;
+  let linternaActiva = false;
 
   function cambiarPerfil(){
     const p = document.getElementById('perfil').value;
@@ -61,65 +81,89 @@
   }
 
   async function iniciarCamara(){
-    const camaras = await Html5Qrcode.getCameras();
-    const trasera = camaras.find(c => /back|tras|rear|environment/i.test(c.label)) || camaras[camaras.length - 1];
+    const estado = document.getElementById('estadoScan');
+    estado.textContent = 'Iniciando cámara...';
+    document.getElementById('cajaVideo').style.display = 'block';
 
-    await qr.start(
-      trasera.id,
-      {
-        fps: 10,
-        // Sin qrbox: decodifica el fotograma completo (evita el bug de recorte con códigos anchos)
-        formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128],
-        videoConstraints: {
-          deviceId: trasera.id,
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
-        }
-      },
-      (texto) => buscar(texto),
-      (msgError) => { /* intentos fallidos normales, se ignoran */ }
-    );
-    escaneando = true;
+    // Solo Code128 → decodifica más rápido y evita falsos intentos con otros formatos
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.CODE_128]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    codeReader = new ZXing.BrowserMultiFormatReader(hints);
 
-    setTimeout(() => {
-      try {
-        const capacidades = qr.getRunningTrackCapabilities();
-        if (capacidades && capacidades.torch) {
-          document.getElementById('btnLinterna').style.display = 'block';
-        }
-      } catch(e) {}
-    }, 800);
-  }
-
-    // Botón de linterna, si el dispositivo lo soporta
     try {
-      const capacidades = qr.getRunningTrackCapabilities();
-      if (capacidades && capacidades.torch) {
-        document.getElementById('btnLinterna').style.display = 'block';
-      }
-    } catch(e) {}
+      const dispositivos = await codeReader.listVideoInputDevices();
+      const trasera = dispositivos.find(d => /back|tras|rear|environment/i.test(d.label)) ||
+                       dispositivos[dispositivos.length - 1];
+      if (!trasera) { estado.textContent = '❌ No se encontró ninguna cámara.'; return; }
+
+      escaneando = true;
+      estado.textContent = 'Apunta al código de barras...';
+
+      codeReader.decodeFromVideoDevice(trasera.deviceId, 'video', (resultado, error) => {
+        if (resultado) {
+          const texto = resultado.getText();
+          const ahora = Date.now();
+          // Evita procesar el mismo código repetidas veces en menos de 3 segundos
+          if (texto === ultimoCodigoLeido && (ahora - ultimoLeidoEn) < 3000) return;
+          ultimoCodigoLeido = texto;
+          ultimoLeidoEn = ahora;
+          navigator.vibrate && navigator.vibrate(120);
+          estado.textContent = '✅ Código detectado';
+          buscar(texto);
+        }
+        // errores de "no encontrado en este frame" son normales, se ignoran
+      });
+
+      // Guardar el stream para poder controlar la linterna
+      const video = document.getElementById('video');
+      setTimeout(() => {
+        mediaStreamActual = video.srcObject;
+        const track = mediaStreamActual && mediaStreamActual.getVideoTracks()[0];
+        if (track) {
+          const capacidades = track.getCapabilities ? track.getCapabilities() : {};
+          if (capacidades.torch) document.getElementById('btnLinterna').style.display = 'block';
+        }
+      }, 700);
+
+    } catch (err) {
+      estado.textContent = '❌ No se pudo acceder a la cámara: ' + (err.message || err);
+    }
   }
 
-  let linternaActiva = false;
   function toggleLinterna(){
+    if (!mediaStreamActual) return;
+    const track = mediaStreamActual.getVideoTracks()[0];
+    if (!track) return;
     linternaActiva = !linternaActiva;
-    qr.applyVideoConstraints({ advanced: [{ torch: linternaActiva }] }).catch(()=>{});
+    track.applyConstraints({ advanced: [{ torch: linternaActiva }] }).catch(() => {});
   }
 
-  function hoyISO(){ const h=new Date(); return h.getFullYear()+'-'+String(h.getMonth()+1).padStart(2,'0')+'-'+String(h.getDate()).padStart(2,'0'); }
+  function hoyISO(){
+    const h = new Date();
+    return h.getFullYear() + '-' + String(h.getMonth()+1).padStart(2,'0') + '-' + String(h.getDate()).padStart(2,'0');
+  }
 
   async function buscar(codigo){
-    const resp = await fetch(URL_BASE + '?api=buscar&fecha=' + hoyISO() + '&codigo=' + encodeURIComponent(codigo));
-    const r = await resp.json();
-    mostrar(r);
+    try {
+      const resp = await fetch(URL_BASE + '?api=buscar&fecha=' + hoyISO() + '&codigo=' + encodeURIComponent(codigo));
+      const r = await resp.json();
+      mostrar(r);
+    } catch (err) {
+      document.getElementById('resultado').innerHTML =
+        '<div class="resultado err"><h3>❌ Error de conexión</h3><p>' + (err.message || err) + '</p></div>';
+    }
   }
 
   function mostrar(r){
     const div = document.getElementById('resultado');
-    if (!r.ok){ div.innerHTML = '<div class="resultado err"><h3>❌</h3><p>'+r.mensaje+'</p></div>'; return; }
+    if (!r.ok) {
+      div.innerHTML = '<div class="resultado err"><h3>❌</h3><p>' + esc(r.mensaje) + '</p></div>';
+      return;
+    }
     ultimo = r;
-    div.innerHTML = '<div class="resultado ok"><h3>✅ '+(r.nombre||r.dni)+'</h3>' +
-      '<p>DNI '+r.dni+' · HC '+r.hc+' · '+r.turno+'</p></div>' +
+    div.innerHTML = '<div class="resultado ok"><h3>✅ ' + esc(r.nombre || r.dni) + '</h3>' +
+      '<p>DNI ' + r.dni + ' · HC ' + r.hc + ' · ' + esc(r.turno || '') + '</p></div>' +
       '<button class="btn btn-asis" onclick="registrar(\'ASISTIO\')">✅ ASISTIÓ</button>' +
       '<button class="btn btn-no" onclick="registrar(\'NO ASISTIO\')">❌ NO ASISTIÓ</button>';
   }
@@ -127,14 +171,22 @@
   async function registrar(estado){
     const perfil = document.getElementById('perfil').value;
     const dig = document.getElementById('digitador').value;
-    if ((perfil==='ADMISION'||perfil==='EMERGENCIA') && !dig){ alert('Selecciona el digitador'); return; }
-    const url = URL_BASE + '?api=registrar&hoja='+encodeURIComponent(ultimo.hoja)+'&fila='+ultimo.fila+
-                '&perfil='+perfil+'&estado='+encodeURIComponent(estado)+'&digitador='+encodeURIComponent(dig);
-    const resp = await fetch(url);
-    const r = await resp.json();
-    alert(r.mensaje);
-    document.getElementById('resultado').innerHTML = '';
+    if ((perfil === 'ADMISION' || perfil === 'EMERGENCIA') && !dig) { alert('Selecciona el digitador'); return; }
+
+    const url = URL_BASE + '?api=registrar&hoja=' + encodeURIComponent(ultimo.hoja) + '&fila=' + ultimo.fila +
+                '&perfil=' + perfil + '&estado=' + encodeURIComponent(estado) + '&digitador=' + encodeURIComponent(dig);
+    try {
+      const resp = await fetch(url);
+      const r = await resp.json();
+      alert(r.mensaje);
+      document.getElementById('resultado').innerHTML = '';
+      document.getElementById('estadoScan').textContent = 'Apunta al código de barras...';
+    } catch (err) {
+      alert('Error al registrar: ' + (err.message || err));
+    }
   }
+
+  function esc(t){ return String(t == null ? '' : t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 </script>
 </body>
 </html>
